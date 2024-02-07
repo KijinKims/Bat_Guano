@@ -1,0 +1,138 @@
+library(data.table)
+library(dplyr)
+library (optparse)
+library(stringr)
+library(phyloseq)
+library(microViz)
+
+MakePalette <- function(df, group){
+  df <- select(psmelt(df), group)
+  
+  unique_df <- unlist(unique(df))
+  unique_df[is.na(unique_df)] <- "Unclassified"
+  
+  palette <- distinctColorPalette(length(unique_df))
+  names(palette) <- unique_df
+  
+  palette = palette[names(palette) != "Others"]
+  palette["Others"] = "navy"
+  
+  palette = palette[names(palette) != "Unclassified"]
+  palette["Unclassified"] = "gray"
+  
+  return(palette)
+}
+
+
+option_list <- list ( make_option (c("-f","--filelist"),default="blah.txt", 
+                                   help="comma separated list of files (default %default)"),
+                      make_option (c("-o","--output"),default="output.csv", 
+                                   help="output file (default %default)")
+)
+
+parser <-OptionParser(option_list=option_list)
+arguments <- parse_args (parser, positional_arguments=TRUE)
+opt <- arguments$options
+args <- arguments$args
+
+myfilelist <- strsplit(opt$filelist, ",")[[1]]
+confidence = 0.8
+final_df <- data.frame()
+
+for (k in c(1:length(myfilelist))){
+  
+  input_file = myfilelist[k]
+  sample <- tools::file_path_sans_ext(input_file)
+
+  # Read in sintax file.
+  temp <- read.table(file = input_file, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
+  # Extract taxonomy with confidences.
+  taxa <- temp[ , 2]
+  # Modify taxonomy field.
+  # Delete closing parenthesis
+  taxa <- gsub(')', '', taxa)
+  # Substitute commma for opening parenthesis.
+  taxa <- gsub('\\(', ',', taxa)
+  # Subsitute underscore for colon
+  taxa <- gsub(':', '_', taxa)
+  # Create data frame with ranks and confidences in separate columns.
+  class.table <- matrix(data = NA, nrow = length(taxa), ncol = 14)
+  for (i in 1:nrow(class.table)) {
+    taxa.line <- strsplit(taxa[i], ',')
+    for (j in 1:14) {
+      class.table[i, j] <- taxa.line[[1]][j]
+    }
+  }
+  
+  if (all(is.na(class.table[ , 13]))) {
+    class.table <- class.table[ , -c(13,14)]
+  }
+  
+  #Create a vector designating confidence columns.
+  conf.col.no <- seq(from=2, to=ncol(class.table), by=2)
+  
+  # Convert these columns to numeric
+  class.table <- as.data.frame(class.table)
+  class.table[conf.col.no] <- lapply(class.table[conf.col.no], as.character)
+  class.table[conf.col.no] <- lapply(class.table[conf.col.no], as.numeric)
+  
+  # Create a vector designating taxa columns.
+  taxa.col.no <- seq(from=1, to=ncol(class.table)-1, by=2)
+  
+  # Convert these columns to character.
+  class.table[taxa.col.no] <- lapply(class.table[taxa.col.no], as.character)
+  
+  #There may be NA's in some columns, so replace them first.
+  # with confidence < specified confidence:
+  for (i in 1:nrow(class.table)) {
+    for (j in conf.col.no) {
+      if (is.na(class.table[i, j])) {
+        class.table[i, j] <- confidence/2
+      }
+    }
+  }
+  
+  # Replace IDs where domain is unidentfied.
+  for (i in  1:nrow(class.table)) {
+    if (class.table[i, 2] < confidence) {
+      class.table[i, 2] <- 1
+      class.table[i, 1] <- "uncl_Domain"
+    }
+  }
+  
+  # Replace IDs where confidence is less than specified confidence:
+  col.no <- seq(from=4, to=ncol(class.table), by=2)
+  for (i in 1:nrow(class.table)) {
+    for (j in col.no) {
+      if (class.table[i, j] < confidence) {
+        class.table[i, j] <- 1
+        if(substr(class.table[i, (j-3)], 1, 5)=="uncl_") {class.table[i, (j-1)] <- class.table[i, (j-3)]}
+        else {class.table[i, (j-1)] <- paste("uncl_", class.table[i, (j-3)], sep="")}
+      }
+    }
+  }
+  
+  # Remove confidence columns
+  class.table <- class.table[ , -c(seq(from = 2, to = ncol(class.table), by = 2))]
+  colnames(class.table) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+  
+  df <- class.table %>% group_by_all() %>% count
+  colnames(df)[colnames(df) == "n"] = sample
+  
+  if (k==1){
+    final_df = df
+  }
+  else{
+    final_df <- full_join(final_df, df, by=colnames(class.table))
+    final_df[is.na(final_df)] <- 0
+  }
+}
+
+final_df[,1:7] <- lapply(final_df[,1:7], function(x) str_sub(start = 3, x))
+final_df <- as.matrix(final_df)
+final_df[startsWith(final_df[,1:7], "cl_")] <- NA
+
+rownames(final_df) <- rownames(final_df, do.NULL = FALSE, prefix = "OTU")
+final_df[,8:ncol(final_df)] <- as.integer(final_df[,8:ncol(final_df)])
+
+write.csv(final_df, file = opt$output, quote = FALSE)
