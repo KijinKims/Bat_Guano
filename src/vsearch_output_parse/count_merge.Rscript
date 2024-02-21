@@ -27,7 +27,9 @@ MakePalette <- function(df, group){
 option_list <- list ( make_option (c("-f","--filelist"),default="blah.txt", 
                                    help="comma separated list of files (default %default)"),
                       make_option (c("-o","--output"),default="output.csv", 
-                                   help="output file (default %default)")
+                                   help="output file (default %default)"),
+		      make_option (c("-c","--confidence"),default=0.8,
+		                   help="confidence score threshold")
 )
 
 parser <-OptionParser(option_list=option_list)
@@ -36,7 +38,7 @@ opt <- arguments$options
 args <- arguments$args
 
 myfilelist <- strsplit(opt$filelist, ",")[[1]]
-confidence = 0.8
+confidence <- opt$confidence
 final_df <- data.frame()
 
 for (k in c(1:length(myfilelist))){
@@ -48,6 +50,7 @@ for (k in c(1:length(myfilelist))){
   temp <- read.table(file = input_file, sep = "\t", fill = TRUE, stringsAsFactors = FALSE)
   # Extract taxonomy with confidences.
   taxa <- temp[ , 2]
+  taxa <- taxa[taxa != ""]
   # Modify taxonomy field.
   # Delete closing parenthesis
   taxa <- gsub(')', '', taxa)
@@ -56,16 +59,16 @@ for (k in c(1:length(myfilelist))){
   # Subsitute underscore for colon
   taxa <- gsub(':', '_', taxa)
   # Create data frame with ranks and confidences in separate columns.
-  class.table <- matrix(data = NA, nrow = length(taxa), ncol = 14)
+  class.table <- matrix(data = NA, nrow = length(taxa), ncol = 16)
   for (i in 1:nrow(class.table)) {
     taxa.line <- strsplit(taxa[i], ',')
-    for (j in 1:14) {
+    for (j in 1:16) {
       class.table[i, j] <- taxa.line[[1]][j]
     }
   }
   
-  if (all(is.na(class.table[ , 13]))) {
-    class.table <- class.table[ , -c(13,14)]
+  if (all(is.na(class.table[ , 15]))) {
+    class.table <- class.table[ , -c(15,16)]
   }
   
   #Create a vector designating confidence columns.
@@ -81,7 +84,6 @@ for (k in c(1:length(myfilelist))){
   
   # Convert these columns to character.
   class.table[taxa.col.no] <- lapply(class.table[taxa.col.no], as.character)
-  
   #There may be NA's in some columns, so replace them first.
   # with confidence < specified confidence:
   for (i in 1:nrow(class.table)) {
@@ -92,6 +94,7 @@ for (k in c(1:length(myfilelist))){
     }
   }
   
+  print(sample)
   # Replace IDs where domain is unidentfied.
   for (i in  1:nrow(class.table)) {
     if (class.table[i, 2] < confidence) {
@@ -114,7 +117,7 @@ for (k in c(1:length(myfilelist))){
   
   # Remove confidence columns
   class.table <- class.table[ , -c(seq(from = 2, to = ncol(class.table), by = 2))]
-  colnames(class.table) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+  colnames(class.table) <- c("Domain", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
   
   df <- class.table %>% group_by_all() %>% count
   colnames(df)[colnames(df) == "n"] = sample
@@ -128,11 +131,11 @@ for (k in c(1:length(myfilelist))){
   }
 }
 
-final_df[,1:7] <- lapply(final_df[,1:7], function(x) str_sub(start = 3, x))
+final_df[,1:8] <- lapply(final_df[,1:8], function(x) str_sub(start = 3, x))
 final_df <- as.matrix(final_df)
-final_df[startsWith(final_df[,1:7], "cl_")] <- NA
+final_df[startsWith(final_df[,1:8], "cl_")] <- NA
 
 rownames(final_df) <- rownames(final_df, do.NULL = FALSE, prefix = "OTU")
-final_df[,8:ncol(final_df)] <- as.integer(final_df[,8:ncol(final_df)])
+final_df[,9:ncol(final_df)] <- as.integer(final_df[,9:ncol(final_df)])
 
 write.csv(final_df, file = opt$output, quote = FALSE)
